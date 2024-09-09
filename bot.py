@@ -9,6 +9,7 @@ from aiogram.filters import Command
 from config import BOT_TOKEN
 from models import User
 import logging, os, asyncio
+from functools import wraps
 
 
 RUNNIG_MODE = os.getenv("RUNNING_MODE", "prod")
@@ -19,6 +20,31 @@ storage = MemoryStorage()
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=storage)
 dp.update.middleware(LoggingMiddleware())
+user_auth_cache = {}
+
+
+async def authenticate_user(message:types.Message):
+    if message.chat.id in user_auth_cache:
+        if user_auth_cache[message.chat.id]:
+            return user_auth_cache[message.chat.id]  
+    
+    user_exists = await user_exist(message.chat.id)
+    
+    user_auth_cache[message.chat.id] = user_exists
+    return user_exists
+
+
+def authenticated_only(func):
+    @wraps(func)
+    async def wrapper(message: types.Message, *args, **kwargs):
+        
+        authenticate = await authenticate_user(message)
+        if authenticate:
+            return await func(message, *args, **kwargs)
+        else:
+            await show_phone_number_request(message, "لطفا شماره تلفن خود را از طریق منو زیر به اشتراک بگذارید.")
+            return
+    return wrapper
 
 
 async def user_exist(user_id):
@@ -35,14 +61,23 @@ async def register_user_to_db(user:User, user_id):
     await user.save()
     return user
 
+async def show_phone_number_request(message: types.Message, response):
+    phone_button = KeyboardButton(text="اشتراک شماره تلفن", request_contact=True)
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[[phone_button]],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+    await message.reply(response, reply_markup=keyboard)
 
 async def show_main_menu(message: types.Message, response):
-    profile_button = KeyboardButton(text="Profile")
-    orders_button = KeyboardButton(text="Orders")
-    logout_button = KeyboardButton(text="Logout")
+    tweet_button = KeyboardButton(text="توئیت جدید")
+    bot_help_handler = KeyboardButton(text="راهنمای استفاده از بات")
+    label_help_handler = KeyboardButton(text="راهنمای برچسب گذاری")
+    history_button = KeyboardButton(text="عملکرد گذشته")
     
     main_menu_keyboard = ReplyKeyboardMarkup(
-        keyboard=[[profile_button], [orders_button], [logout_button]],
+        keyboard=[[tweet_button], [bot_help_handler, label_help_handler, history_button]],
         resize_keyboard=True 
     )
     
@@ -53,15 +88,9 @@ async def start_command_handler(message: types.Message):
     user = await user_exist(message.chat.id)
     
     if user:
-        await show_main_menu(message, "You are already registered.")  
+        await show_main_menu(message, "شما وارد شده اید!")  
     else:
-        phone_button = KeyboardButton(text="Share your phone number", request_contact=True)
-        keyboard = ReplyKeyboardMarkup(
-            keyboard=[[phone_button]],
-            resize_keyboard=True,
-            one_time_keyboard=True
-        )
-        await message.reply("Please share your phone number by clicking the button in menu.", reply_markup=keyboard)
+        await show_phone_number_request(message, "لطفا شماره تلفن خود را از طریق منو زیر به اشتراک بگذارید.")
 
 
 async def contact_handler(message: types.Message):
@@ -70,30 +99,34 @@ async def contact_handler(message: types.Message):
             user = await phone_number_exist(message.contact.phone_number)
             if user:
                 await register_user_to_db(user, message.chat.id)
-                await show_main_menu(message, "You have been successfully registered!")  
+                await show_main_menu(message, "ورود شما موفقیت آمیز بود!")  
             else:
-                await message.reply("You do not have access to this bot.")
+                await message.reply("شما دسترسی مجاز به این بات را ندارید!")
         else:
-            await message.reply("this is not your phone number")
+            await message.reply("لطفا شماره تلفن خود را از طریق منو به اشتراک بگذارید.")
 
 
 async def set_bot_commands(bot: Bot):
     commands = [
-        BotCommand(command="start", description="Start the bot"),
+        BotCommand(command="start", description="شروع"),
     ]
     await bot.set_my_commands(commands)
 
-
-async def profile_handler(message: types.Message):
-    await message.reply("This is your profile.")
-
-
-async def orders_handler(message: types.Message):
-    await message.reply("Here are your orders.")
+@authenticated_only
+async def tweet_handler(message: types.Message):
+    await message.reply("This is your tweet.")
 
 
-async def logout_handler(message: types.Message):
-    await message.reply("You have logged out.")
+async def bot_help_handler(message: types.Message):
+    await message.reply("Here are your bot help.")
+
+
+async def label_help_handler(message: types.Message):
+    await message.reply("Here are your label help.")
+
+
+async def history_handler(message: types.Message):
+    await message.reply("Here are your history help.")
 
 
 async def main():
@@ -103,9 +136,10 @@ async def main():
     # dp.callback_query.register(phone_number_request_callback_handler, lambda callback_query: callback_query.data == "share_phone")
     
 
-    dp.message.register(profile_handler, lambda message: message.text == "Profile")
-    dp.message.register(orders_handler, lambda message: message.text == "Orders")
-    dp.message.register(logout_handler, lambda message: message.text == "Logout")
+    dp.message.register(tweet_handler, lambda message: message.text == "توئیت جدید")
+    dp.message.register(bot_help_handler, lambda message: message.text == "راهنمای استفاده از بات")
+    dp.message.register(history_handler, lambda message: message.text == "عملکرد گذشته")
+    dp.message.register(label_help_handler, lambda message: message.text == "راهنمای برچسب گذاری")
     dp.message.register(contact_handler, lambda message: message.contact)
 
     # dp.message.register(save_message_handler)
